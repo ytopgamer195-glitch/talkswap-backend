@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 {
   "name": "talkswap-backend",
   "version": "1.0.0",
@@ -14,3 +15,21 @@
     "resend": "^6.10.0"
   }
 }
+=======
+{
+  "name": "talkswap-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "livekit-server-sdk": "^2.15.1",
+    "node-fetch": "^2.7.0"
+  }
+}
+>>>>>>> 245f86ceb58b4f9c4fa67e39416af8aad0829926
