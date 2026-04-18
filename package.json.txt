@@ -8,8 +8,10 @@
   },
   "dependencies": {
     "cors": "^2.8.5",
+    "dotenv": "^16.6.1",
     "express": "^4.21.2",
     "livekit-server-sdk": "^2.15.1",
-    "node-fetch": "^2.7.0"
+    "node-fetch": "^2.7.0",
+    "resend": "^6.10.0"
   }
 }
