@@ -265,6 +265,17 @@ app.post("/verify-otp", async (req, res) => {
   }
 });
 
+app.get("/", (req, res) => {
+  res.status(200).send("TalkSwap server is running");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "talkswap-token-server",
+  });
+});
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
