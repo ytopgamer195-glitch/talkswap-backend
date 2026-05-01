@@ -275,7 +275,110 @@ app.get("/health", (req, res) => {
     service: "talkswap-token-server",
   });
 });
+// ================= PASSWORD RESET OTP =================
 
+// SEND PASSWORD OTP
+app.post("/send-password-otp", async (req, res) => {
+  try {
+    const { email } = req.body || {};
+    const safeEmail = String(email || "").trim().toLowerCase();
+
+    if (!safeEmail) return res.status(400).json({ error: "Email required" });
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+
+    await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email: safeEmail,
+        otp,
+        verified: false,
+        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
+      }),
+    });
+
+    await resend.emails.send({
+      from: OTP_FROM_EMAIL,
+      to: safeEmail,
+      subject: "Reset your TalkSwap password",
+      html: `<h2>Your OTP is: ${otp}</h2>`,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("SEND PASSWORD OTP ERROR:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
+
+
+// RESET PASSWORD WITH OTP
+app.post("/reset-password-with-otp", async (req, res) => {
+  try {
+    const { email, otp, newPassword } = req.body || {};
+
+    const safeEmail = String(email || "").trim().toLowerCase();
+    const safeOtp = String(otp || "").trim();
+    const safePassword = String(newPassword || "").trim();
+
+    if (!safeEmail || !safeOtp || !safePassword) {
+      return res.status(400).json({ error: "Missing data" });
+    }
+
+    const response = await fetch(
+      `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(
+        safeEmail
+      )}&otp=eq.${encodeURIComponent(safeOtp)}&verified=is.false&select=*`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+
+    const rows = await response.json();
+
+    if (!rows.length) {
+      return res.status(400).json({ error: "Invalid OTP" });
+    }
+
+    const userRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/profiles?email=eq.${encodeURIComponent(safeEmail)}&select=id`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+
+    const users = await userRes.json();
+    const userId = users?.[0]?.id;
+
+    await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
+      method: "PUT",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        password: safePassword,
+      }),
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("RESET PASSWORD ERROR:", err);
+    return res.status(500).json({ error: "Server error" });
+  }
+});
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
