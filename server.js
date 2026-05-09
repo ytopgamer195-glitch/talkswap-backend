@@ -25,6 +25,46 @@ const OTP_FROM_EMAIL =
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
+const supabaseAdmin = {
+  insertNotification: async ({
+  userId,
+  senderId,
+  type,
+  title = null,
+  body,
+  referenceId = null,
+}) => {
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/notifications`, {
+        method: "POST",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+          Prefer: "return=minimal",
+        },
+        body: JSON.stringify({
+  user_id: userId,
+  sender_id: senderId,
+  type,
+  title: title || null,
+  body,
+  reference_id: referenceId,
+  is_read: false,
+}),
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.log("Notification insert error:", text);
+      }
+    } catch (err) {
+      console.log("Notification error:", err.message);
+    }
+  },
+};
+
+
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
 
 if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
@@ -130,6 +170,168 @@ app.post("/send-push", requireAppSecret, async (req, res) => {
   }
 });
 
+app.post("/notify", requireAppSecret, async (req, res) => {
+  try {
+    const {
+      receiverId,
+      senderId,
+      type,
+      title,
+      body,
+      referenceId = null,
+      pushData = {},
+    } = req.body || {};
+
+    if (!receiverId || !type || !body) {
+      return res.status(400).json({
+        error: "receiverId, type, and body are required",
+      });
+    }
+
+    const profileRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${receiverId}&select=push_token,push_notifications,message_notifications,follow_notifications,voice_room_notifications,call_notifications,missed_call_notifications`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+
+    const profiles = await profileRes.json();
+    const receiver = profiles?.[0];
+
+    let allowed = receiver?.push_notifications !== false;
+
+    if (type === "message" && receiver?.message_notifications === false) allowed = false;
+    if ((type === "follow" || type === "follow_request" || type === "follow_back") && receiver?.follow_notifications === false) allowed = false;
+    if (type === "voice_room_invite" && receiver?.voice_room_notifications === false) allowed = false;
+    if (type === "incoming_call" && receiver?.call_notifications === false) allowed = false;
+    if (type === "missed_call" && receiver?.missed_call_notifications === false) allowed = false;
+
+    await supabaseAdmin.insertNotification({
+      userId: receiverId,
+      senderId: senderId || null,
+      type,
+      title: title || null,
+      body,
+      referenceId,
+    });
+
+    if (allowed && receiver?.push_token) {
+      const pushResponse = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          to: receiver.push_token,
+          sound: "default",
+          title: title || "TalkSwap",
+          body,
+          data: {
+            type,
+            referenceId,
+            senderId,
+            ...pushData,
+          },
+          priority: "high",
+          channelId: "default",
+        }),
+      });
+
+      const pushResult = await pushResponse.json();
+
+      return res.json({
+        success: true,
+        notification: true,
+        push: pushResult,
+      });
+    }
+
+    return res.json({
+      success: true,
+      notification: true,
+      push: false,
+    });
+  } catch (error) {
+    console.error("notify error:", error);
+    return res.status(500).json({
+      error: "Failed to notify user",
+    });
+  }
+});
+app.post("/test-notification", async (req, res) => {
+  try {
+    const { userId } = req.body;
+
+    await supabaseAdmin.insertNotification({
+      userId,
+      senderId: null,
+      type: "test",
+      body: "This is a test notification 🔥",
+    });
+
+    return res.json({ success: true });
+  } catch (e) {
+    return res.status(500).json({ error: "Failed" });
+  }
+});
+
+app.post("/voice-room-invite-notification", requireAppSecret, async (req, res) => {
+  try {
+    const { invitedUserId, hostId, roomId, roomTitle } = req.body || {};
+
+    if (!invitedUserId || !hostId || !roomId) {
+      return res.status(400).json({
+        error: "invitedUserId, hostId, and roomId are required",
+      });
+    }
+
+    await supabaseAdmin.insertNotification({
+      userId: invitedUserId,
+      senderId: hostId,
+      type: "voice_room_invite",
+      body: `invited you to ${roomTitle || "a voice room"}`,
+      referenceId: roomId,
+    });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("voice room invite notification error:", error);
+    return res.status(500).json({
+      error: "Failed to create voice room invite notification",
+    });
+  }
+});
+
+
+app.post("/message-notification", requireAppSecret, async (req, res) => {
+  try {
+    const { receiverId, senderId, conversationId, senderName } = req.body || {};
+
+    if (!receiverId || !senderId || !conversationId) {
+      return res.status(400).json({
+        error: "receiverId, senderId, and conversationId are required",
+      });
+    }
+
+    await supabaseAdmin.insertNotification({
+      userId: receiverId,
+      senderId,
+      type: "message",
+      body: `${senderName || "Someone"} sent you a message`,
+      referenceId: conversationId,
+    });
+
+    return res.json({ success: true });
+  } catch (error) {
+    console.error("message notification error:", error);
+    return res.status(500).json({
+      error: "Failed to create message notification",
+    });
+  }
+});
 app.post("/send-otp", async (req, res) => {
   try {
     const { email } = req.body || {};
@@ -265,120 +467,6 @@ app.post("/verify-otp", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => {
-  res.status(200).send("TalkSwap server is running");
-});
-
-app.get("/health", (req, res) => {
-  res.status(200).json({
-    status: "ok",
-    service: "talkswap-token-server",
-  });
-});
-// ================= PASSWORD RESET OTP =================
-
-// SEND PASSWORD OTP
-app.post("/send-password-otp", async (req, res) => {
-  try {
-    const { email } = req.body || {};
-    const safeEmail = String(email || "").trim().toLowerCase();
-
-    if (!safeEmail) return res.status(400).json({ error: "Email required" });
-
-    const otp = Math.floor(1000 + Math.random() * 9000).toString();
-
-    await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
-      method: "POST",
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        email: safeEmail,
-        otp,
-        verified: false,
-        expires_at: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-      }),
-    });
-
-    await resend.emails.send({
-      from: OTP_FROM_EMAIL,
-      to: safeEmail,
-      subject: "Reset your TalkSwap password",
-      html: `<h2>Your OTP is: ${otp}</h2>`,
-    });
-
-    return res.json({ success: true });
-  } catch (err) {
-    console.error("SEND PASSWORD OTP ERROR:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
-});
-
-
-// RESET PASSWORD WITH OTP
-app.post("/reset-password-with-otp", async (req, res) => {
-  try {
-    const { email, otp, newPassword } = req.body || {};
-
-    const safeEmail = String(email || "").trim().toLowerCase();
-    const safeOtp = String(otp || "").trim();
-    const safePassword = String(newPassword || "").trim();
-
-    if (!safeEmail || !safeOtp || !safePassword) {
-      return res.status(400).json({ error: "Missing data" });
-    }
-
-    const response = await fetch(
-      `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(
-        safeEmail
-      )}&otp=eq.${encodeURIComponent(safeOtp)}&verified=is.false&select=*`,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      }
-    );
-
-    const rows = await response.json();
-
-    if (!rows.length) {
-      return res.status(400).json({ error: "Invalid OTP" });
-    }
-
-    const userRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/profiles?email=eq.${encodeURIComponent(safeEmail)}&select=id`,
-      {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      }
-    );
-
-    const users = await userRes.json();
-    const userId = users?.[0]?.id;
-
-    await fetch(`${SUPABASE_URL}/auth/v1/admin/users/${userId}`, {
-      method: "PUT",
-      headers: {
-        apikey: SUPABASE_SERVICE_ROLE_KEY,
-        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        password: safePassword,
-      }),
-    });
-
-    return res.json({ success: true });
-  } catch (err) {
-    console.error("RESET PASSWORD ERROR:", err);
-    return res.status(500).json({ error: "Server error" });
-  }
-});
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
