@@ -533,10 +533,9 @@ app.post("/reset-password-with-otp", async (req, res) => {
         error: "Email, OTP and new password required",
       });
     }
-
-    const otpRes = await fetch(
-      `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=eq.false&select=*`
-      {
+const otpRes = await fetch(
+  `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=eq.false&select=*`,
+  {
         headers: {
           apikey: SUPABASE_SERVICE_ROLE_KEY,
           Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
