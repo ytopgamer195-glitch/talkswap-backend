@@ -484,12 +484,13 @@ app.post("/send-password-otp", async (req, res) => {
 
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
-    await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
+    const saveOtpRes = await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
       method: "POST",
       headers: {
         apikey: SUPABASE_SERVICE_ROLE_KEY,
         Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         "Content-Type": "application/json",
+        Prefer: "return=representation",
       },
       body: JSON.stringify({
         email,
@@ -498,6 +499,14 @@ app.post("/send-password-otp", async (req, res) => {
         expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
       }),
     });
+
+    if (!saveOtpRes.ok) {
+      const text = await saveOtpRes.text();
+      console.error("SAVE PASSWORD OTP ERROR:", text);
+      return res.status(500).json({
+        error: "Failed to save password OTP",
+      });
+    }
 
     await resend.emails.send({
       from: OTP_FROM_EMAIL,
