@@ -24,10 +24,14 @@ const OTP_FROM_EMAIL =
   process.env.OTP_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const supabaseAuthAdmin = createClient(
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY
-);
+let supabaseAuthAdmin = null;
+
+if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+  supabaseAuthAdmin = createClient(
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY
+  );
+}
 
 const supabaseAdmin = {
   insertNotification: async ({
@@ -554,7 +558,11 @@ app.post("/reset-password-with-otp", async (req, res) => {
         error: "OTP expired",
       });
     }
-
+if (!supabaseAuthAdmin) {
+  return res.status(500).json({
+    error: "Supabase admin is not configured",
+  });
+}
     const { data: listData, error: listError } =
       await supabaseAuthAdmin.auth.admin.listUsers();
 
