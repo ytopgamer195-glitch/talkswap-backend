@@ -5,7 +5,7 @@ const cors = require("cors");
 const fetch = require("node-fetch");
 const { AccessToken } = require("livekit-server-sdk");
 const { Resend } = require("resend");
-
+const { createClient } = require("@supabase/supabase-js");
 const app = express();
 
 app.use(cors());
@@ -24,6 +24,10 @@ const OTP_FROM_EMAIL =
   process.env.OTP_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAuthAdmin = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
+);
 
 const supabaseAdmin = {
   insertNotification: async ({
@@ -464,6 +468,137 @@ app.post("/verify-otp", async (req, res) => {
   } catch (err) {
     console.error("VERIFY OTP ERROR:", err);
     return res.status(500).json({ error: "Server error" });
+  }
+});
+app.post("/send-password-otp", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+
+    if (!email) {
+      return res.status(400).json({ error: "Email required" });
+    }
+
+    const otp = Math.floor(1000 + Math.random() * 9000).toString();
+
+    await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
+      method: "POST",
+      headers: {
+        apikey: SUPABASE_SERVICE_ROLE_KEY,
+        Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        email,
+        otp,
+        used: false,
+        expires_at: new Date(Date.now() + 5 * 60 * 1000).toISOString(),
+      }),
+    });
+
+    await resend.emails.send({
+      from: OTP_FROM_EMAIL,
+      to: email,
+      subject: "TalkSwap Password Reset OTP",
+      html: `
+        <div style="font-family:Arial;padding:24px">
+          <h2>TalkSwap Password Reset</h2>
+          <p>Your OTP is:</p>
+          <div style="font-size:32px;font-weight:800;letter-spacing:8px">${otp}</div>
+          <p>This OTP expires in 5 minutes.</p>
+        </div>
+      `,
+    });
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("send-password-otp error:", err);
+    return res.status(500).json({
+      error: "Failed to send password OTP",
+    });
+  }
+});
+
+app.post("/reset-password-with-otp", async (req, res) => {
+  try {
+    const email = String(req.body?.email || "").trim().toLowerCase();
+    const otp = String(req.body?.otp || "").trim();
+    const newPassword = String(req.body?.newPassword || "").trim();
+
+    if (!email || !otp || !newPassword) {
+      return res.status(400).json({
+        error: "Email, OTP and new password required",
+      });
+    }
+
+    const otpRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=is.false&select=*`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
+
+    const rows = await otpRes.json();
+    const otpRow = rows?.[0];
+
+    if (!otpRow) {
+      return res.status(400).json({
+        error: "Invalid OTP",
+      });
+    }
+
+    if (new Date(otpRow.expires_at).getTime() < Date.now()) {
+      return res.status(400).json({
+        error: "OTP expired",
+      });
+    }
+
+    const { data: listData, error: listError } =
+      await supabaseAuthAdmin.auth.admin.listUsers();
+
+    if (listError) throw listError;
+
+    const user = listData.users.find(
+      (u) => String(u.email || "").toLowerCase() === email
+    );
+
+    if (!user) {
+      return res.status(404).json({
+        error: "User not found",
+      });
+    }
+
+    const { error: updateError } =
+      await supabaseAuthAdmin.auth.admin.updateUserById(user.id, {
+        password: newPassword,
+      });
+
+    if (updateError) throw updateError;
+
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/password_reset_otps?id=eq.${otpRow.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          used: true,
+        }),
+      }
+    );
+
+    return res.json({ success: true });
+  } catch (err) {
+    console.error("reset-password-with-otp error:", err);
+
+    return res.status(500).json({
+      error: "Failed to reset password",
+    });
   }
 });
 
