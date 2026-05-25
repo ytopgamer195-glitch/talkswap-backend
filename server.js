@@ -536,12 +536,12 @@ app.post("/reset-password-with-otp", async (req, res) => {
 const otpRes = await fetch(
   `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=eq.false&select=*`,
   {
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-        },
-      }
-    );
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+    },
+  }
+);
 
     const rows = await otpRes.json();
     const otpRow = rows?.[0];
