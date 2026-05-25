@@ -533,20 +533,32 @@ app.post("/reset-password-with-otp", async (req, res) => {
         error: "Email, OTP and new password required",
       });
     }
-const otpRes = await fetch(
-  `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=eq.false&select=*`,
-  {
-    headers: {
-      apikey: SUPABASE_SERVICE_ROLE_KEY,
-      Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-    },
-  }
-);
 
-    const rows = await otpRes.json();
-    const otpRow = rows?.[0];
+    if (!supabaseAuthAdmin) {
+      return res.status(500).json({
+        error: "Supabase admin is not configured",
+      });
+    }
+
+    const { data: otpRows, error: otpError } = await supabaseAuthAdmin
+      .from("password_reset_otps")
+      .select("*")
+      .eq("email", email)
+      .eq("used", false)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (otpError) throw otpError;
+
+    const otpRow = otpRows?.[0];
 
     if (!otpRow) {
+      return res.status(400).json({
+        error: "No active OTP found. Please request a new OTP.",
+      });
+    }
+
+    if (String(otpRow.otp).trim() !== otp) {
       return res.status(400).json({
         error: "Invalid OTP",
       });
@@ -557,11 +569,7 @@ const otpRes = await fetch(
         error: "OTP expired",
       });
     }
-if (!supabaseAuthAdmin) {
-  return res.status(500).json({
-    error: "Supabase admin is not configured",
-  });
-}
+
     const { data: listData, error: listError } =
       await supabaseAuthAdmin.auth.admin.listUsers();
 
@@ -584,31 +592,16 @@ if (!supabaseAuthAdmin) {
 
     if (updateError) throw updateError;
 
-    await fetch(
-      `${SUPABASE_URL}/rest/v1/password_reset_otps?id=eq.${otpRow.id}`,
-      {
-        method: "PATCH",
-        headers: {
-          apikey: SUPABASE_SERVICE_ROLE_KEY,
-          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          used: true,
-        }),
-      }
-    );
+    await supabaseAuthAdmin
+      .from("password_reset_otps")
+      .update({ used: true })
+      .eq("id", otpRow.id);
 
     return res.json({ success: true });
   } catch (err) {
     console.error("reset-password-with-otp error:", err);
-
     return res.status(500).json({
       error: "Failed to reset password",
     });
   }
-});
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`✅ Server running on port ${PORT}`);
 });
