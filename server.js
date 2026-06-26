@@ -4,7 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const { AccessToken } = require("livekit-server-sdk");
-const { Resend } = require("resend");
+const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
 const { createClient } = require("@supabase/supabase-js");
 const app = express();
 
@@ -19,19 +19,15 @@ const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
 const TOKEN_ENDPOINT_SECRET = process.env.TOKEN_ENDPOINT_SECRET;
 
 // OTP / email
-const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const OTP_FROM_EMAIL =
-  process.env.OTP_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
+const AWS_REGION = process.env.AWS_REGION || "ap-south-1";
+const SES_FROM_EMAIL =
+  process.env.SES_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
-let supabaseAuthAdmin = null;
-
-if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
-  supabaseAuthAdmin = createClient(
-    SUPABASE_URL,
-    SUPABASE_SERVICE_ROLE_KEY
-  );
-}
+const supabaseAuthAdmin = createClient(
+  SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY
+);
 
 const supabaseAdmin = {
   insertNotification: async ({
@@ -73,7 +69,9 @@ const supabaseAdmin = {
 };
 
 
-const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null;
+const sesClient = new SESClient({
+  region: AWS_REGION,
+});
 
 if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
   throw new Error("Missing LIVEKIT_API_KEY or LIVEKIT_API_SECRET");
@@ -83,9 +81,7 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.warn("OTP routes need SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
 }
 
-if (!RESEND_API_KEY) {
-  console.warn("OTP routes need RESEND_API_KEY");
-}
+
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -340,6 +336,28 @@ app.post("/message-notification", requireAppSecret, async (req, res) => {
     });
   }
 });
+async function sendOtpEmail({ to, subject, html }) {
+  const command = new SendEmailCommand({
+    Source: SES_FROM_EMAIL,
+    Destination: {
+      ToAddresses: [to],
+    },
+    Message: {
+      Subject: {
+        Data: subject,
+        Charset: "UTF-8",
+      },
+      Body: {
+        Html: {
+          Data: html,
+          Charset: "UTF-8",
+        },
+      },
+    },
+  });
+
+  return sesClient.send(command);
+}
 app.post("/send-otp", async (req, res) => {
   try {
     const { email } = req.body || {};
@@ -349,10 +367,7 @@ app.post("/send-otp", async (req, res) => {
       return res.status(400).json({ error: "Email required" });
     }
 
-    if (!resend) {
-      return res.status(500).json({ error: "Email service not configured" });
-    }
-
+   
     if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
       return res.status(500).json({ error: "OTP database not configured" });
     }
@@ -381,11 +396,10 @@ app.post("/send-otp", async (req, res) => {
       return res.status(500).json({ error: "Failed to save OTP" });
     }
 
-    const emailResult = await resend.emails.send({
-      from: OTP_FROM_EMAIL,
-      to: safeEmail,
-      subject: "Your TalkSwap OTP",
-      html: `
+   const emailResult = await sendOtpEmail({
+  to: safeEmail,
+  subject: "Your TalkSwap OTP",
+  html: `
         <div style="font-family:Arial,sans-serif;padding:24px;color:#111">
           <h2 style="margin:0 0 12px">Your TalkSwap OTP</h2>
           <p style="margin:0 0 16px">Use this 4-digit code to continue:</p>
@@ -484,13 +498,12 @@ app.post("/send-password-otp", async (req, res) => {
 
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
-    const saveOtpRes = await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
+    await fetch(`${SUPABASE_URL}/rest/v1/password_reset_otps`, {
       method: "POST",
       headers: {
         apikey: SUPABASE_SERVICE_ROLE_KEY,
         Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
         "Content-Type": "application/json",
-        Prefer: "return=representation",
       },
       body: JSON.stringify({
         email,
@@ -500,19 +513,10 @@ app.post("/send-password-otp", async (req, res) => {
       }),
     });
 
-    if (!saveOtpRes.ok) {
-      const text = await saveOtpRes.text();
-      console.error("SAVE PASSWORD OTP ERROR:", text);
-      return res.status(500).json({
-        error: "Failed to save password OTP",
-      });
-    }
-
-    await resend.emails.send({
-      from: OTP_FROM_EMAIL,
-      to: email,
-      subject: "TalkSwap Password Reset OTP",
-      html: `
+    await sendOtpEmail({
+  to: email,
+  subject: "TalkSwap Password Reset OTP",
+  html: `
         <div style="font-family:Arial;padding:24px">
           <h2>TalkSwap Password Reset</h2>
           <p>Your OTP is:</p>
@@ -543,31 +547,20 @@ app.post("/reset-password-with-otp", async (req, res) => {
       });
     }
 
-    if (!supabaseAuthAdmin) {
-      return res.status(500).json({
-        error: "Supabase admin is not configured",
-      });
-    }
+    const otpRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/password_reset_otps?email=eq.${encodeURIComponent(email)}&otp=eq.${encodeURIComponent(otp)}&used=is.false&select=*`,
+      {
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+        },
+      }
+    );
 
-    const { data: otpRows, error: otpError } = await supabaseAuthAdmin
-      .from("password_reset_otps")
-      .select("*")
-      .eq("email", email)
-      .eq("used", false)
-      .order("created_at", { ascending: false })
-      .limit(1);
-
-    if (otpError) throw otpError;
-
-    const otpRow = otpRows?.[0];
+    const rows = await otpRes.json();
+    const otpRow = rows?.[0];
 
     if (!otpRow) {
-      return res.status(400).json({
-        error: "No active OTP found. Please request a new OTP.",
-      });
-    }
-
-    if (String(otpRow.otp).trim() !== otp) {
       return res.status(400).json({
         error: "Invalid OTP",
       });
@@ -601,19 +594,31 @@ app.post("/reset-password-with-otp", async (req, res) => {
 
     if (updateError) throw updateError;
 
-    await supabaseAuthAdmin
-      .from("password_reset_otps")
-      .update({ used: true })
-      .eq("id", otpRow.id);
+    await fetch(
+      `${SUPABASE_URL}/rest/v1/password_reset_otps?id=eq.${otpRow.id}`,
+      {
+        method: "PATCH",
+        headers: {
+          apikey: SUPABASE_SERVICE_ROLE_KEY,
+          Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          used: true,
+        }),
+      }
+    );
 
     return res.json({ success: true });
   } catch (err) {
     console.error("reset-password-with-otp error:", err);
+
     return res.status(500).json({
       error: "Failed to reset password",
     });
   }
 });
+
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on port ${PORT}`);
 });
