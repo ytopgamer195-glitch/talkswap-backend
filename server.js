@@ -208,12 +208,17 @@ app.post("/notify", requireAppSecret, async (req, res) => {
     let allowed = receiver?.push_notifications !== false;
 
     if (type === "message" && receiver?.message_notifications === false) allowed = false;
-    if ((type === "follow" || type === "follow_request" || type === "follow_back") && receiver?.follow_notifications === false) allowed = false;
+    if (
+      (type === "follow" || type === "follow_request" || type === "follow_back") &&
+      receiver?.follow_notifications === false
+    ) {
+      allowed = false;
+    }
     if (type === "voice_room_invite" && receiver?.voice_room_notifications === false) allowed = false;
     if (type === "incoming_call" && receiver?.call_notifications === false) allowed = false;
     if (type === "missed_call" && receiver?.missed_call_notifications === false) allowed = false;
 
-    await supabaseAdmin.insertNotification({
+    const notificationPromise = supabaseAdmin.insertNotification({
       userId: receiverId,
       senderId: senderId || null,
       type,
@@ -222,8 +227,10 @@ app.post("/notify", requireAppSecret, async (req, res) => {
       referenceId,
     });
 
+    let pushPromise = Promise.resolve(false);
+
     if (allowed && receiver?.push_token) {
-      const pushResponse = await fetch("https://exp.host/--/api/v2/push/send", {
+      pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -242,21 +249,23 @@ app.post("/notify", requireAppSecret, async (req, res) => {
           priority: "high",
           channelId: "default",
         }),
-      });
-
-      const pushResult = await pushResponse.json();
-
-      return res.json({
-        success: true,
-        notification: true,
-        push: pushResult,
-      });
+      })
+        .then((r) => r.json())
+        .catch((err) => {
+          console.log("Expo push failed:", err.message);
+          return false;
+        });
     }
+
+    const [, pushResult] = await Promise.all([
+      notificationPromise,
+      pushPromise,
+    ]);
 
     return res.json({
       success: true,
       notification: true,
-      push: false,
+      push: pushResult,
     });
   } catch (error) {
     console.error("notify error:", error);
