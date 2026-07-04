@@ -4,7 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
 const { AccessToken } = require("livekit-server-sdk");
-const { SESClient, SendEmailCommand } = require("@aws-sdk/client-ses");
+const Brevo = require("@getbrevo/brevo")
 const { createClient } = require("@supabase/supabase-js");
 const app = express();
 
@@ -19,9 +19,18 @@ const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
 const TOKEN_ENDPOINT_SECRET = process.env.TOKEN_ENDPOINT_SECRET;
 
 // OTP / email
-const AWS_REGION = process.env.AWS_REGION || "ap-south-1";
-const SES_FROM_EMAIL =
-  process.env.SES_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
+;
+
+const apiInstance = new Brevo.TransactionalEmailsApi();
+
+apiInstance.setApiKey(
+  Brevo.TransactionalEmailsApiApiKeys.apiKey,
+  process.env.BREVO_API_KEY
+);
+
+const FROM_EMAIL =
+  process.env.OTP_FROM_EMAIL || "TalkSwap <otp@talkswap.in>";
+
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 const supabaseAuthAdmin = createClient(
@@ -69,9 +78,7 @@ const supabaseAdmin = {
 };
 
 
-const sesClient = new SESClient({
-  region: AWS_REGION,
-});
+
 
 if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
   throw new Error("Missing LIVEKIT_API_KEY or LIVEKIT_API_SECRET");
@@ -346,26 +353,19 @@ app.post("/message-notification", requireAppSecret, async (req, res) => {
   }
 });
 async function sendOtpEmail({ to, subject, html }) {
-  const command = new SendEmailCommand({
-    Source: SES_FROM_EMAIL,
-    Destination: {
-      ToAddresses: [to],
+  await apiInstance.sendTransacEmail({
+    sender: {
+      name: "TalkSwap",
+      email: FROM_EMAIL.replace(/^.*<|>$/g, ""),
     },
-    Message: {
-      Subject: {
-        Data: subject,
-        Charset: "UTF-8",
+    to: [
+      {
+        email: to,
       },
-      Body: {
-        Html: {
-          Data: html,
-          Charset: "UTF-8",
-        },
-      },
-    },
+    ],
+    subject,
+    htmlContent: html,
   });
-
-  return sesClient.send(command);
 }
 app.post("/send-otp", async (req, res) => {
   try {
