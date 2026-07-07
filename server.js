@@ -38,6 +38,12 @@ const supabaseAuthAdmin = createClient(
   SUPABASE_SERVICE_ROLE_KEY
 );
 
+// Notification category identifier for the Reply/Like action buttons.
+// Must exactly match the identifier registered client-side in lib/push.ts's
+// Notifications.setNotificationCategoryAsync() call, or Expo/the OS won't
+// know which action set to attach to the delivered notification.
+const MESSAGE_NOTIFICATION_CATEGORY = "message-actions";
+
 const supabaseAdmin = {
   insertNotification: async ({
   userId,
@@ -237,25 +243,34 @@ app.post("/notify", requireAppSecret, async (req, res) => {
     let pushPromise = Promise.resolve(false);
 
     if (allowed && receiver?.push_token) {
+      const expoPayload = {
+        to: receiver.push_token,
+        sound: "default",
+        title: title || "TalkSwap",
+        body,
+        data: {
+          type,
+          referenceId,
+          senderId,
+          ...pushData,
+        },
+        priority: "high",
+        channelId: "default",
+      };
+
+      // Reply/Like action buttons — only meaningful for message notifications,
+      // and only if the client actually sent a messageId to act on (added in
+      // chat.tsx's notifyPartnerIfAllowed call for the "message" type).
+      if (type === "message" && pushData?.messageId) {
+        expoPayload.categoryId = MESSAGE_NOTIFICATION_CATEGORY;
+      }
+
       pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          to: receiver.push_token,
-          sound: "default",
-          title: title || "TalkSwap",
-          body,
-          data: {
-            type,
-            referenceId,
-            senderId,
-            ...pushData,
-          },
-          priority: "high",
-          channelId: "default",
-        }),
+        body: JSON.stringify(expoPayload),
       })
         .then((r) => r.json())
         .catch((err) => {
