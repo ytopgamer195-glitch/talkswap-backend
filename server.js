@@ -237,6 +237,16 @@ app.post("/notify", requireAppSecret, async (req, res) => {
     let pushPromise = Promise.resolve(false);
 
     if (allowed && receiver?.push_token) {
+      // FIX — route each push to the correctly-configured Android channel
+      // instead of always using DEFAULT importance, which Android batches
+      // and delays instead of showing immediately.
+      const channelId =
+        type === "incoming_call" || type === "missed_call"
+          ? "calls"
+          : type === "message"
+          ? "messages"
+          : "default";
+
       pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: {
@@ -254,7 +264,10 @@ app.post("/notify", requireAppSecret, async (req, res) => {
             ...pushData,
           },
           priority: "high",
-          channelId: "default",
+          channelId,
+          // categoryId attaches the Reply/Like buttons defined client-side
+          // in setupNotificationCategories() below.
+          categoryId: type === "message" ? "message" : undefined,
         }),
       })
         .then((r) => r.json())
