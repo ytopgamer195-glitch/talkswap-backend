@@ -247,7 +247,7 @@ app.post("/notify", requireAppSecret, async (req, res) => {
           ? "messages"
           : "default";
 
-      new_str:       const isMessage = type === "message";
+    const isMessage = type === "message";
 
       pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
