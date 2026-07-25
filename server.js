@@ -247,6 +247,8 @@ app.post("/notify", requireAppSecret, async (req, res) => {
           ? "messages"
           : "default";
 
+      new_str:       const isMessage = type === "message";
+
       pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: {
@@ -254,20 +256,25 @@ app.post("/notify", requireAppSecret, async (req, res) => {
         },
         body: JSON.stringify({
           to: receiver.push_token,
-          sound: "default",
-          title: title || "TalkSwap",
-          body,
+          // FIX — message pushes carry NO title/body at the top level, so
+          // the OS never auto-displays a raw one-per-message banner. The
+          // client's own grouping logic (lib/notificationGrouping.ts) is
+          // the only thing that ever shows a banner for a message — that's
+          // what makes merging multiple unseen messages possible. Calls,
+          // follows, etc. are untouched and still show instantly.
+          ...(isMessage ? {} : { title: title || "TalkSwap", body, sound: "default" }),
           data: {
             type,
             referenceId,
             senderId,
+            conversationId: referenceId,
+            messagePreview: body,
             ...pushData,
           },
           priority: "high",
           channelId,
-          // categoryId attaches the Reply/Like buttons defined client-side
-          // in setupNotificationCategories() below.
-          categoryId: type === "message" ? "message" : undefined,
+          categoryId: isMessage ? "message" : undefined,
+          _contentAvailable: isMessage,
         }),
       })
         .then((r) => r.json())
