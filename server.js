@@ -156,6 +156,8 @@ app.post("/send-push", requireAppSecret, async (req, res) => {
       });
     }
 
+  const payloadData = data || {};
+
     const response = await fetch("https://exp.host/--/api/v2/push/send", {
       method: "POST",
       headers: {
@@ -166,8 +168,21 @@ app.post("/send-push", requireAppSecret, async (req, res) => {
         sound: "default",
         title,
         body,
-        data: data || {},
+        data: payloadData,
         priority: "high",
+        // FIX — without this, Android puts the push on a generic channel
+        // that collapses to "AppName • Now" instead of showing the actual
+        // message text.
+        channelId: payloadData.type === "message" ? "messages" : "default",
+        // FIX — required for the Like/Reply buttons to render at all. Must
+        // match the category identifier registered on the device (see the
+        // client-side setup below).
+        categoryId: payloadData.type === "message" ? "message" : undefined,
+        // Groups pushes per-conversation so a second message from the same
+        // chat replaces the notification instead of stacking a duplicate.
+        ...(payloadData.conversationId
+          ? { collapseId: `conversation-${payloadData.conversationId}` }
+          : {}),
       }),
     });
 
