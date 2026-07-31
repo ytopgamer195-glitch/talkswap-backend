@@ -269,28 +269,24 @@ app.post("/notify", requireAppSecret, async (req, res) => {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          to: receiver.push_token,
-          // FIX — message pushes carry NO title/body at the top level, so
-          // the OS never auto-displays a raw one-per-message banner. The
-          // client's own grouping logic (lib/notificationGrouping.ts) is
-          // the only thing that ever shows a banner for a message — that's
-          // what makes merging multiple unseen messages possible. Calls,
-          // follows, etc. are untouched and still show instantly.
-          ...(isMessage ? {} : { title: title || "TalkSwap", body, sound: "default" }),
-          data: {
-            type,
-            referenceId,
-            senderId,
-            conversationId: referenceId,
-            messagePreview: body,
-            ...pushData,
-          },
-          priority: "high",
-          channelId,
-          categoryId: isMessage ? "message" : undefined,
-          _contentAvailable: isMessage,
-        }),
+       body: JSON.stringify({
+  to: receiver.push_token,
+  title: title || "TalkSwap",
+  body,
+  sound: "default",
+  data: {
+    type,
+    referenceId,
+    senderId,
+    conversationId: referenceId,
+    messagePreview: body,
+    ...pushData,
+  },
+  priority: "high",
+  channelId,
+  categoryId: isMessage ? "message" : undefined,
+  ...(referenceId ? { collapseId: `conversation-${referenceId}` } : {}),
+}),
       })
         .then((r) => r.json())
         .catch((err) => {
