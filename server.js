@@ -3,7 +3,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const fetch = require("node-fetch");
-const { AccessToken } = require("livekit-server-sdk");
+const { AccessToken, AgentDispatchClient } = require("livekit-server-sdk");
 const Brevo = require("@getbrevo/brevo")
 const { createClient } = require("@supabase/supabase-js");
 const app = express();
@@ -16,6 +16,7 @@ const PORT = process.env.PORT || 3000;
 // LiveKit
 const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY;
 const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET;
+const LIVEKIT_URL = process.env.LIVEKIT_URL; // NEW — needed for AgentDispatchClient below. Must be https://..., not wss://
 const TOKEN_ENDPOINT_SECRET = process.env.TOKEN_ENDPOINT_SECRET;
 
 // OTP / email
@@ -88,7 +89,16 @@ if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   console.warn("OTP routes need SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY");
 }
 
-
+// NEW — AI Partner dispatch client. Warns instead of throwing at startup
+// (unlike the LIVEKIT_API_KEY check above) so a missing LIVEKIT_URL
+// doesn't take down the whole backend, just disables this one feature
+// until it's set.
+let aiPartnerDispatchClient = null;
+if (LIVEKIT_URL && LIVEKIT_API_KEY && LIVEKIT_API_SECRET) {
+  aiPartnerDispatchClient = new AgentDispatchClient(LIVEKIT_URL, LIVEKIT_API_KEY, LIVEKIT_API_SECRET);
+} else {
+  console.warn("AI Partner routes need LIVEKIT_URL set (in addition to the existing LIVEKIT_API_KEY/SECRET)");
+}
 
 app.get("/health", (_req, res) => {
   res.json({
@@ -146,6 +156,56 @@ app.post("/token", requireAppSecret, async (req, res) => {
   }
 });
 
+// NEW — dispatches the AI conversation partner agent into a specific
+// room. Requires the separate agent worker (agent/agent.ts) to actually
+// be deployed and running with agentName "talkswap-tutor" — this route
+// just tells LiveKit to send it into the room, it doesn't run the agent
+// itself.
+app.post("/ai-partner/start", requireAppSecret, async (req, res) => {
+  try {
+    if (!aiPartnerDispatchClient) {
+      return res.status(500).json({ error: "AI partner dispatch not configured (missing LIVEKIT_URL env var)" });
+    }
+
+    const { livekitRoomName, targetLang, sessionId } = req.body || {};
+    if (!livekitRoomName || !sessionId) {
+      return res.status(400).json({ error: "livekitRoomName and sessionId are required" });
+    }
+
+    const dispatch = await aiPartnerDispatchClient.createDispatch(livekitRoomName, "talkswap-tutor", {
+      metadata: JSON.stringify({ targetLang: targetLang ?? null, sessionId }),
+    });
+
+    return res.json({ dispatchId: dispatch.id });
+  } catch (error) {
+    console.error("ai-partner/start error:", error);
+    return res.status(500).json({
+      error: "Failed to dispatch AI partner",
+    });
+  }
+});
+
+app.post("/ai-partner/stop", requireAppSecret, async (req, res) => {
+  try {
+    if (!aiPartnerDispatchClient) {
+      return res.status(500).json({ error: "AI partner dispatch not configured (missing LIVEKIT_URL env var)" });
+    }
+
+    const { livekitRoomName, dispatchId } = req.body || {};
+    if (!livekitRoomName || !dispatchId) {
+      return res.status(400).json({ error: "livekitRoomName and dispatchId are required" });
+    }
+
+    await aiPartnerDispatchClient.deleteDispatch(dispatchId, livekitRoomName);
+    return res.json({ ok: true });
+  } catch (error) {
+    console.error("ai-partner/stop error:", error);
+    return res.status(500).json({
+      error: "Failed to stop AI partner",
+    });
+  }
+});
+
 app.post("/send-push", requireAppSecret, async (req, res) => {
   try {
     const { token, title, body, data } = req.body || {};
@@ -170,16 +230,8 @@ app.post("/send-push", requireAppSecret, async (req, res) => {
         body,
         data: payloadData,
         priority: "high",
-        // FIX — without this, Android puts the push on a generic channel
-        // that collapses to "AppName • Now" instead of showing the actual
-        // message text.
         channelId: payloadData.type === "message" ? "messages" : "default",
-        // FIX — required for the Like/Reply buttons to render at all. Must
-        // match the category identifier registered on the device (see the
-        // client-side setup below).
         categoryId: payloadData.type === "message" ? "message" : undefined,
-        // Groups pushes per-conversation so a second message from the same
-        // chat replaces the notification instead of stacking a duplicate.
         ...(payloadData.conversationId
           ? { collapseId: `conversation-${payloadData.conversationId}` }
           : {}),
@@ -252,9 +304,6 @@ app.post("/notify", requireAppSecret, async (req, res) => {
     let pushPromise = Promise.resolve(false);
 
     if (allowed && receiver?.push_token) {
-      // FIX — route each push to the correctly-configured Android channel
-      // instead of always using DEFAULT importance, which Android batches
-      // and delays instead of showing immediately.
       const channelId =
         type === "incoming_call" || type === "missed_call"
           ? "calls"
