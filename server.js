@@ -247,7 +247,86 @@ app.post("/send-push", requireAppSecret, async (req, res) => {
     });
   }
 });
+app.post("/notify-from-db", requireAppSecret, async (req, res) => {
+  try {
+    const record = req.body?.record;
+    if (!record?.conversation_id || !record?.sender_id) return res.status(200).json({ skipped: true });
 
+    const convRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/conversations?id=eq.${record.conversation_id}&select=user1,user2`,
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } }
+    );
+    const conv = (await convRes.json())?.[0];
+    if (!conv) return res.status(200).json({ skipped: true });
+
+    const receiverId = conv.user1 === record.sender_id ? conv.user2 : conv.user1;
+
+    const senderRes = await fetch(
+      `${SUPABASE_URL}/rest/v1/profiles?id=eq.${record.sender_id}&select=username,full_name`,
+      { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } }
+    );
+    const sender = (await senderRes.json())?.[0];
+    const senderName = sender?.username || sender?.full_name || "TalkSwap User";
+
+    let body = "New message";
+    if (record.text) body = record.text.length > 80 ? record.text.slice(0, 80) + "..." : record.text;
+    else if (record.voice_url) body = "🎤 Sent a voice message";
+    else if (record.media_type === "video") body = "🎥 Sent a video";
+    else if (record.media_type === "image") body = "🖼 Sent a photo";
+
+    await handleNotify({
+      receiverId,
+      senderId: record.sender_id,
+      type: "message",
+      title: senderName,
+      body,
+      referenceId: record.conversation_id,
+      pushData: {
+        conversationId: String(record.conversation_id),
+        senderName,
+        messageId: record.id,
+        messagePreview: body,
+      },
+    });
+
+    return res.status(200).json({ ok: true });
+  } catch (error) {
+    console.error("notify-from-db error:", error);
+    return res.status(500).json({ error: "Failed" });
+  }
+});
+async function handleNotify({ receiverId, senderId, type, title, body, referenceId = null, pushData = {} }) {
+  const profileRes = await fetch(
+    `${SUPABASE_URL}/rest/v1/profiles?id=eq.${receiverId}&select=push_token,push_notifications,message_notifications,follow_notifications,voice_room_notifications,call_notifications,missed_call_notifications`,
+    { headers: { apikey: SUPABASE_SERVICE_ROLE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}` } }
+  );
+  const profiles = await profileRes.json();
+  const receiver = profiles?.[0];
+
+  let allowed = receiver?.push_notifications !== false;
+  if (type === "message" && receiver?.message_notifications === false) allowed = false;
+
+  await supabaseAdmin.insertNotification({ userId: receiverId, senderId, type, title, body, referenceId });
+
+  if (allowed && receiver?.push_token) {
+    const channelId = type === "message" ? "messages" : "default";
+    await fetch("https://exp.host/--/api/v2/push/send", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        to: receiver.push_token,
+        title: title || "TalkSwap",
+        body,
+        sound: "default",
+        data: { type, referenceId, senderId, ...pushData },
+        priority: "high",
+        channelId,
+        categoryId: type === "message" ? "message" : undefined,
+        ...(referenceId ? { collapseId: `conversation-${referenceId}` } : {}),
+      }),
+    }).catch((e) => console.log("push send failed:", e.message));
+  }
+}
 app.post("/notify", requireAppSecret, async (req, res) => {
   try {
     const {
