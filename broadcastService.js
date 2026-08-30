@@ -51,8 +51,16 @@ function chunk(arr, size) {
  * @param {string} title
  * @param {string} bodyTemplate  e.g. "Hey {username}, meet new friends today! 🌍"
  * @param {string|null} sentBy   profile id of whoever triggered this, or null for the CLI script
+ * @param {object} [options]
+ * @param {string[]} [options.testUserIds]  if provided, ONLY these user ids
+ *   are sent to — everyone else is skipped, regardless of their push
+ *   token/opt-in status. Use this to safely test the whole pipeline
+ *   against your own account before ever sending to real users. Omit
+ *   entirely (or pass nothing) for a normal, real, everyone-eligible send.
  */
-async function sendBroadcast(title, bodyTemplate, sentBy = null) {
+async function sendBroadcast(title, bodyTemplate, sentBy = null, options = {}) {
+  const { testUserIds } = options;
+
   if (!title?.trim() || !bodyTemplate?.trim()) {
     throw new Error("title and bodyTemplate are both required");
   }
@@ -61,7 +69,15 @@ async function sendBroadcast(title, bodyTemplate, sentBy = null) {
   //    through leaves a record instead of silently vanishing.
   const { data: campaign, error: campaignError } = await supabase
     .from("broadcast_notifications")
-    .insert({ title, body_template: bodyTemplate, sent_by: sentBy, status: "running" })
+    .insert({
+      title,
+      body_template: bodyTemplate,
+      sent_by: sentBy,
+      status: "running",
+      // Test sends are tagged in the title so they're unmistakable in the
+      // campaign log later — never confused with a real campaign.
+      ...(testUserIds?.length ? { title: `[TEST] ${title}` } : {}),
+    })
     .select()
     .single();
 
@@ -70,13 +86,17 @@ async function sendBroadcast(title, bodyTemplate, sentBy = null) {
   }
 
   try {
-    // 2. Pull every eligible recipient. Only the columns actually needed —
-    //    this table can be large, no reason to pull everything.
-    const { data: recipients, error: fetchError } = await supabase
-      .from("profiles")
-      .select("id, username, push_token")
-      .not("push_token", "is", null)
-      .eq("push_notifications_enabled", true);
+    // 2. Pull recipients. In test mode, this is narrowed to just the ids
+    //    you passed in — everyone else is completely untouched.
+    let query = supabase.from("profiles").select("id, username, push_token");
+
+    if (testUserIds?.length) {
+      query = query.in("id", testUserIds);
+    } else {
+      query = query.not("push_token", "is", null).eq("push_notifications_enabled", true);
+    }
+
+    const { data: recipients, error: fetchError } = await query;
 
     if (fetchError) throw new Error(`Could not fetch recipients: ${fetchError.message}`);
 
@@ -175,4 +195,4 @@ async function sendBroadcast(title, bodyTemplate, sentBy = null) {
   }
 }
 
-module.exports = { sendBroadcast };BB
+module.exports = { sendBroadcast };
