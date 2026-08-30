@@ -308,7 +308,7 @@ async function handleNotify({ receiverId, senderId, type, title, body, reference
 
   await supabaseAdmin.insertNotification({ userId: receiverId, senderId, type, title, body, referenceId });
 
-  iif (allowed && receiver?.push_token) {
+  if (allowed && receiver?.push_token) {
     const channelId = type === "message" ? "messages" : "default";
     try {
       const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
