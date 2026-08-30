@@ -314,11 +314,12 @@ async function handleNotify({ receiverId, senderId, type, title, body, reference
             const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+                body: JSON.stringify({
           to: receiver.push_token,
-          // FIX — same as /notify above: this path is always a message,
-          // so it's always data-only now, letting the app's own
-          // background handler build the grouped notification.
+          // FIX (reverted — same reliability reasoning as /notify above)
+          title: title || "TalkSwap",
+          body,
+          sound: "default",
           data: { type, referenceId, senderId, ...pushData },
           priority: "high",
           channelId,
@@ -405,19 +406,23 @@ app.post("/notify", requireAppSecret, async (req, res) => {
         headers: {
           "Content-Type": "application/json",
         },
-       body: JSON.stringify({
+              body: JSON.stringify({
   to: receiver.push_token,
-  // FIX (WhatsApp-style notifications) — message pushes now go out
-  // data-only (no title/body/sound at the top level). A "display"
-  // push with title+body gets auto-rendered by Android itself before
-  // the app's own JS ever runs, which is exactly why notifications
-  // were showing as raw, ungrouped system banners with no Reply/Like
-  // buttons — the app's own grouping/action-button logic in push.ts
-  // never got a chance to run. Data-only pushes are delivered silently
-  // to the background task instead, which builds the real notification
-  // itself (with actions and per-sender grouping) — same mechanism
-  // WhatsApp uses. Non-message types are untouched.
-  ...(isMessage ? {} : { title: title || "TalkSwap", body, sound: "default" }),
+  // FIX (reverted — reliability over grouping polish) — data-only
+  // pushes have no delivery guarantee: many Android OEMs (Xiaomi,
+  // Honor, Oppo, Samsung) throttle or drop them under battery
+  // restrictions, and iOS gives zero delivery guarantee for silent
+  // pushes at all. Every message now always includes title/body again,
+  // so the OS shows it instantly and reliably no matter what state the
+  // app is in. categoryId is still included, which keeps Reply/Like
+  // buttons even on an OS-auto-displayed notification. The trade: when
+  // the app is fully force-quit, multiple fast messages may show as
+  // separate banners instead of merging into one — foreground and
+  // backgrounded-but-alive states still get full custom grouping via
+  // push.ts, since that JS handler still runs in those states.
+  title: title || "TalkSwap",
+  body,
+  sound: "default",
   data: {
     type,
     referenceId,
