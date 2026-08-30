@@ -311,14 +311,14 @@ async function handleNotify({ receiverId, senderId, type, title, body, reference
   if (allowed && receiver?.push_token) {
     const channelId = type === "message" ? "messages" : "default";
     try {
-      const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+            const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           to: receiver.push_token,
-          title: title || "TalkSwap",
-          body,
-          sound: "default",
+          // FIX — same as /notify above: this path is always a message,
+          // so it's always data-only now, letting the app's own
+          // background handler build the grouped notification.
           data: { type, referenceId, senderId, ...pushData },
           priority: "high",
           channelId,
@@ -400,16 +400,24 @@ app.post("/notify", requireAppSecret, async (req, res) => {
 
     const isMessage = type === "message";
 
-      pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
+            pushPromise = fetch("https://exp.host/--/api/v2/push/send", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
        body: JSON.stringify({
   to: receiver.push_token,
-  title: title || "TalkSwap",
-  body,
-  sound: "default",
+  // FIX (WhatsApp-style notifications) — message pushes now go out
+  // data-only (no title/body/sound at the top level). A "display"
+  // push with title+body gets auto-rendered by Android itself before
+  // the app's own JS ever runs, which is exactly why notifications
+  // were showing as raw, ungrouped system banners with no Reply/Like
+  // buttons — the app's own grouping/action-button logic in push.ts
+  // never got a chance to run. Data-only pushes are delivered silently
+  // to the background task instead, which builds the real notification
+  // itself (with actions and per-sender grouping) — same mechanism
+  // WhatsApp uses. Non-message types are untouched.
+  ...(isMessage ? {} : { title: title || "TalkSwap", body, sound: "default" }),
   data: {
     type,
     referenceId,
