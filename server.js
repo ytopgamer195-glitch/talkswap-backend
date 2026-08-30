@@ -308,23 +308,31 @@ async function handleNotify({ receiverId, senderId, type, title, body, reference
 
   await supabaseAdmin.insertNotification({ userId: receiverId, senderId, type, title, body, referenceId });
 
-  if (allowed && receiver?.push_token) {
+  iif (allowed && receiver?.push_token) {
     const channelId = type === "message" ? "messages" : "default";
-    await fetch("https://exp.host/--/api/v2/push/send", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        to: receiver.push_token,
-        title: title || "TalkSwap",
-        body,
-        sound: "default",
-        data: { type, referenceId, senderId, ...pushData },
-        priority: "high",
-        channelId,
-        categoryId: type === "message" ? "message" : undefined,
-        ...(referenceId ? { collapseId: `conversation-${referenceId}` } : {}),
-      }),
-    }).catch((e) => console.log("push send failed:", e.message));
+    try {
+      const expoRes = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: receiver.push_token,
+          title: title || "TalkSwap",
+          body,
+          sound: "default",
+          data: { type, referenceId, senderId, ...pushData },
+          priority: "high",
+          channelId,
+          categoryId: type === "message" ? "message" : undefined,
+          ...(referenceId ? { collapseId: `conversation-${referenceId}` } : {}),
+        }),
+      });
+      const expoResult = await expoRes.json();
+      console.log("EXPO PUSH RESULT:", JSON.stringify(expoResult));
+    } catch (e) {
+      console.log("push send failed:", e.message);
+    }
+  } else {
+    console.log("PUSH SKIPPED — allowed:", allowed, "has token:", !!receiver?.push_token);
   }
 }
 app.post("/notify", requireAppSecret, async (req, res) => {
